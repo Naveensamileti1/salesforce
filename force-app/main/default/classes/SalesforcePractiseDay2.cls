@@ -56,7 +56,7 @@ public with sharing class SalesforcePractiseDay2 {
     System.debug('remove: ' + str.remove('Salesforce')); // " Hello, ! "
     System.debug('removeStart: ' + str.removeStart(' ')); // "Hello, Salesforce! "
     System.debug('removeEnd: ' + str.removeEnd(' ')); // " Hello, Salesforce!"
-    System.debug('repeat: ' + str.repeat(2)); // repeated string
+    System.debug('repeat: ' + str.repeat(2)); // repeated string  Hello, Salesforce!  Hello, Salesforce! 
 
     // ===============================
     // 7. SPLIT / JOIN
