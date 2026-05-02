@@ -31,12 +31,7 @@ public class ContactTriggerHandler extends TriggerHandler {
     List<Contact> newContactList = getContactList(newRecords);
     Map<Id, Contact> newContactMap = getContactMap(newRecordMap);
 
-    for (Contact contactRecord : newContactList) {
-      Contact insertedContact = newContactMap.get(contactRecord.Id);
-
-      // Example logic
-      System.debug('Inserted Contact Id: ' + insertedContact.Id);
-    }
+    numberOfContactsPerAccount(newContactList, null, newContactMap, null);
   }
 
   // -------------------- BEFORE UPDATE --------------------
@@ -78,10 +73,18 @@ public class ContactTriggerHandler extends TriggerHandler {
     Map<Id, SObject> oldRecordMap
   ) {
     List<Contact> newContactList = getContactList(newRecords);
+    List<Contact> oldContactList = getContactList(oldRecords);
     Map<Id, Contact> newContactMap = getContactMap(newRecordMap);
     Map<Id, Contact> oldContactMap = getContactMap(oldRecordMap);
 
     syncAccountDescriptionFromContacts(newContactMap, oldContactMap);
+
+    numberOfContactsPerAccount(
+      newContactList,
+      oldContactList,
+      newContactMap,
+      oldContactMap
+    );
   }
 
   // -------------------- BEFORE DELETE --------------------
@@ -112,11 +115,8 @@ public class ContactTriggerHandler extends TriggerHandler {
     Map<Id, SObject> oldRecordMap
   ) {
     List<Contact> oldContactList = getContactList(oldRecords);
-
-    for (Contact deletedContact : oldContactList) {
-      // Example logic
-      System.debug('Deleted Contact Id: ' + deletedContact.Id);
-    }
+    Map<Id, Contact> oldContactMap = getContactMap(oldRecordMap);
+    numberOfContactsPerAccount(null, oldContactList, null, oldContactMap);
   }
 
   // -------------------- AFTER UNDELETE --------------------
@@ -126,11 +126,9 @@ public class ContactTriggerHandler extends TriggerHandler {
     Map<Id, SObject> newRecordMap
   ) {
     List<Contact> restoredContactList = getContactList(newRecords);
+    Map<Id, Contact> newContactMap = getContactMap(newRecordMap);
 
-    for (Contact restoredContact : restoredContactList) {
-      // Example logic
-      System.debug('Restored Contact Id: ' + restoredContact.Id);
-    }
+    numberOfContactsPerAccount(restoredContactList, null, newContactMap, null);
   }
 
   private void syncAccountDescriptionFromContacts(
@@ -188,5 +186,86 @@ public class ContactTriggerHandler extends TriggerHandler {
     }
 
     update accountsToUpdate;
+  }
+
+  private void numberOfContactsPerAccount(
+    List<Contact> newList,
+    List<Contact> oldList,
+    Map<Id, Contact> newMap,
+    Map<Id, Contact> oldMap
+  ) {
+    Set<Id> accountIds = new Set<Id>();
+
+    // ---------------------------
+    // INSERT / UPDATE / UNDELETE
+    // ---------------------------
+    if (newList != null) {
+      for (Contact con : newList) {
+        if (con.AccountId != null) {
+          accountIds.add(con.AccountId);
+        }
+
+        // Handle AccountId change (UPDATE case)
+        Contact oldCon = (oldMap != null) ? oldMap.get(con.Id) : null;
+
+        if (
+          oldCon != null &&
+          oldCon.AccountId != con.AccountId &&
+          oldCon.AccountId != null
+        ) {
+          accountIds.add(oldCon.AccountId);
+        }
+      }
+    }
+
+    // ---------------------------
+    // DELETE
+    // ---------------------------
+    if (oldList != null) {
+      for (Contact con : oldList) {
+        if (con.AccountId != null) {
+          accountIds.add(con.AccountId);
+        }
+      }
+    }
+
+    if (accountIds.isEmpty())
+      return;
+
+    // ---------------------------
+    // Recalculate counts
+    // ---------------------------
+    Map<Id, Integer> accountContactCount = new Map<Id, Integer>();
+
+    for (AggregateResult ar : [
+      SELECT AccountId accId, COUNT(Id) cnt
+      FROM Contact
+      WHERE AccountId IN :accountIds
+      GROUP BY AccountId
+    ]) {
+      accountContactCount.put((Id) ar.get('accId'), (Integer) ar.get('cnt'));
+    }
+
+    // ---------------------------
+    // Prepare Account updates
+    // ---------------------------
+    List<Account> accountsToUpdate = new List<Account>();
+
+    for (Id accId : accountIds) {
+      Integer count = accountContactCount.containsKey(accId)
+        ? accountContactCount.get(accId)
+        : 0;
+
+      accountsToUpdate.add(
+        new Account(Id = accId, Number_of_Contacts__c = count)
+      );
+    }
+
+    // ---------------------------
+    // DML
+    // ---------------------------
+    if (!accountsToUpdate.isEmpty()) {
+      update accountsToUpdate;
+    }
   }
 }
