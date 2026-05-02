@@ -210,8 +210,8 @@ public class ContactTriggerHandler extends TriggerHandler {
 
         if (
           oldCon != null &&
-          oldCon.AccountId != con.AccountId &&
-          oldCon.AccountId != null
+          oldCon.AccountId != null &&
+          oldCon.AccountId != con.AccountId
         ) {
           accountIds.add(oldCon.AccountId);
         }
