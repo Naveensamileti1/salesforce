@@ -25,8 +25,7 @@ public virtual class TriggerHandler {
 
   private static Map<String, TriggerSetting__mdt> triggerSettingsCache;
   private static Set<String> bypassedObjects = new Set<String>();
-  // Per-record recursion control: store processed keys of form object:context:recordId
-  private static Set<String> processedKeys = new Set<String>();
+  private static Map<String, Set<Id>> processedByContext = new Map<String, Set<Id>>();
   private static Set<String> loggedKeys = new Set<String>();
 
   private String objectName;
@@ -35,15 +34,16 @@ public virtual class TriggerHandler {
 
   public TriggerHandler() {
     if (Trigger.isExecuting) {
-      // SAFE Apex way (NO Trigger.sObjectType dependency issues)
-      if (Trigger.new != null && !Trigger.new.isEmpty()) {
-        objectName = String.valueOf(Trigger.new[0].getSObjectType());
-      } else if (Trigger.old != null && !Trigger.old.isEmpty()) {
-        objectName = String.valueOf(Trigger.old[0].getSObjectType());
-      }
+      // FIXED: proper safe describe-based object detection
+      objectName = Trigger.new != null && !Trigger.new.isEmpty()
+        ? Trigger.new[0].getSObjectType().getDescribe().getName()
+        : Trigger.old[0].getSObjectType().getDescribe().getName();
     }
 
     loadTriggerSettings();
+
+    // Safety reset per transaction
+    processedByContext.clear();
   }
 
   // -------------------- Entry Point --------------------
@@ -227,22 +227,24 @@ public virtual class TriggerHandler {
     if (records == null || records.isEmpty())
       return result;
 
-    // Per-record processed key approach (enterprise-grade):
-    for (SObject record : records) {
-      if (record == null || record.Id == null) {
-        // Skip records without Id (e.g., before insert) — return all for beforeInsert caller
-        continue;
-      }
-      String key = objectName + ':' + context + ':' + String.valueOf(record.Id);
-      if (!processedKeys.contains(key)) {
-        processedKeys.add(key);
-        result.add(record);
-      }
-    }
-
-    // If this is a context where records have no Id (before insert), return original list
     if (context == CONTEXT_BEFORE_INSERT) {
       return records;
+    }
+
+    if (!processedByContext.containsKey(context)) {
+      processedByContext.put(context, new Set<Id>());
+    }
+
+    Set<Id> processedIds = processedByContext.get(context);
+
+    for (SObject record : records) {
+      if (record == null || record.Id == null)
+        continue;
+
+      if (!processedIds.contains(record.Id)) {
+        processedIds.add(record.Id);
+        result.add(record);
+      }
     }
 
     return result;
