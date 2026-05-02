@@ -81,17 +81,7 @@ public class AccountTriggerHandler extends TriggerHandler {
     Map<Id, Account> newAccountMap = getAccountMap(newRecordMap);
     Map<Id, Account> oldAccountMap = getAccountMap(oldRecordMap);
 
-    for (Account newAccount : newAccountList) {
-      Account oldAccount = oldAccountMap.get(newAccount.Id);
-
-      if (oldAccount == null)
-        continue;
-
-      // Example logic
-      if (newAccount.Industry != oldAccount.Industry) {
-        System.debug('Industry updated for Account Id: ' + newAccount.Id);
-      }
-    }
+    updateContactPhoneFromAccount(newAccountMap, oldAccountMap);
   }
 
   // -------------------- BEFORE DELETE --------------------
@@ -135,6 +125,49 @@ public class AccountTriggerHandler extends TriggerHandler {
     for (Account restoredAccount : restoredAccountList) {
       // Example logic
       System.debug('Restored Account Id: ' + restoredAccount.Id);
+    }
+  }
+
+  /**
+   * Updates contact phone numbers based on account phone number changes.
+   * @param newAccountMap Map of new account records.
+   * @param oldAccountMap Map of old account records.
+   */
+  private void updateContactPhoneFromAccount(
+    Map<Id, Account> newAccountMap,
+    Map<Id, Account> oldAccountMap
+  ) {
+    Set<Id> accountIdsToUpdate = new Set<Id>();
+
+    for (Account newAcc : newAccountMap.values()) {
+      Account oldAcc = oldAccountMap.get(newAcc.Id);
+
+      if (oldAcc == null || newAcc.Phone == oldAcc.Phone) {
+        continue;
+      }
+
+      accountIdsToUpdate.add(newAcc.Id);
+    }
+
+    if (accountIdsToUpdate.isEmpty())
+      return;
+
+    List<Contact> contactsList = [
+      SELECT Id, AccountId
+      FROM Contact
+      WHERE AccountId IN :accountIdsToUpdate
+    ];
+
+    for (Contact con : contactsList) {
+      Account acc = newAccountMap.get(con.AccountId);
+
+      if (acc != null) {
+        con.Phone = acc.Phone;
+      }
+    }
+
+    if (!contactsList.isEmpty()) {
+      update contactsList;
     }
   }
 }
