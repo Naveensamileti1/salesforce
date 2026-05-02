@@ -226,13 +226,20 @@ public virtual class TriggerHandler {
     if (records == null || records.isEmpty())
       return result;
 
-    String key =
-      'TriggerHandler_' +
-      objectName +
-      '_' +
-      context +
-      '_' +
-      String.valueOf(Datetime.now().getTime());
+    // Build a stable recursion key per-record: objectName:context:recordId
+    Id firstId = null;
+    for (SObject r : records) {
+      if (r != null && r.Id != null) {
+        firstId = r.Id;
+        break;
+      }
+    }
+    String key;
+    if (firstId != null) {
+      key = objectName + ':' + context + ':' + String.valueOf(firstId);
+    } else {
+      key = objectName + ':' + context + ':no-id';
+    }
 
     if (!processedRecords.containsKey(key)) {
       processedRecords.put(key, new Set<Id>());
