@@ -9,7 +9,7 @@ public virtual class TriggerHandler {
   private static final String CONTEXT_AFTER_DELETE = 'afterDelete';
   private static final String CONTEXT_AFTER_UNDELETE = 'afterUndelete';
 
-  // -------------------- Context → Metadata Field Map --------------------
+  // -------------------- Context → Metadata Mapping --------------------
 
   private static final Map<String, String> CONTEXT_FIELD_MAP = new Map<String, String>{
     CONTEXT_BEFORE_INSERT => 'RunBeforeInsert__c',
@@ -21,7 +21,7 @@ public virtual class TriggerHandler {
     CONTEXT_AFTER_UNDELETE => 'RunAfterUndelete__c'
   };
 
-  // -------------------- Static state --------------------
+  // -------------------- Static State --------------------
 
   private static Map<String, TriggerSetting__mdt> triggerSettingsCache;
   private static Set<String> bypassedObjects = new Set<String>();
@@ -33,20 +33,26 @@ public virtual class TriggerHandler {
   // -------------------- Constructor --------------------
 
   public TriggerHandler() {
-    if (Trigger.new != null && !Trigger.new.isEmpty()) {
-      this.objectName = Trigger.new[0].getSObjectType().getDescribe().getName();
-    } else if (Trigger.old != null && !Trigger.old.isEmpty()) {
-      this.objectName = Trigger.old[0].getSObjectType().getDescribe().getName();
+    if (Trigger.isExecuting) {
+      // SAFE Apex way (NO Trigger.sObjectType dependency issues)
+      if (Trigger.new != null && !Trigger.new.isEmpty()) {
+        objectName = String.valueOf(Trigger.new[0].getSObjectType());
+      } else if (Trigger.old != null && !Trigger.old.isEmpty()) {
+        objectName = String.valueOf(Trigger.old[0].getSObjectType());
+      }
     }
+
     loadTriggerSettings();
   }
 
   // -------------------- Entry Point --------------------
 
   public void run() {
-    // ✅ Correct guard
-    if (!Trigger.isExecuting) {
-      System.debug(LoggingLevel.WARN, 'TriggerHandler called outside trigger');
+    if (!Trigger.isExecuting || String.isBlank(objectName)) {
+      System.debug(
+        LoggingLevel.WARN,
+        'TriggerHandler executed outside trigger'
+      );
       return;
     }
 
@@ -75,17 +81,19 @@ public virtual class TriggerHandler {
         ? Trigger.oldMap
         : new Map<Id, SObject>();
 
-      if (CONTEXT_BEFORE_INSERT.equals(context)) {
+      // -------------------- BEFORE INSERT --------------------
+      if (context == CONTEXT_BEFORE_INSERT) {
         beforeInsert(newList);
         return;
       }
 
-      if (CONTEXT_BEFORE_UPDATE.equals(context)) {
-        List<SObject> newRecords = filterProcessedRecords(newList, context);
-        if (!newRecords.isEmpty()) {
+      // -------------------- BEFORE UPDATE --------------------
+      if (context == CONTEXT_BEFORE_UPDATE) {
+        List<SObject> records = filterProcessedRecords(newList, context);
+        if (!records.isEmpty()) {
           beforeUpdate(
-            newRecords,
-            getFilteredOldRecords(newRecords, oldMap),
+            records,
+            getFilteredOldRecords(records, oldMap),
             newMap,
             oldMap
           );
@@ -93,28 +101,31 @@ public virtual class TriggerHandler {
         return;
       }
 
-      if (CONTEXT_BEFORE_DELETE.equals(context)) {
-        List<SObject> oldRecords = filterProcessedRecords(oldList, context);
-        if (!oldRecords.isEmpty()) {
-          beforeDelete(oldRecords, oldMap);
+      // -------------------- BEFORE DELETE --------------------
+      if (context == CONTEXT_BEFORE_DELETE) {
+        List<SObject> records = filterProcessedRecords(oldList, context);
+        if (!records.isEmpty()) {
+          beforeDelete(records, oldMap);
         }
         return;
       }
 
-      if (CONTEXT_AFTER_INSERT.equals(context)) {
-        List<SObject> newRecords = filterProcessedRecords(newList, context);
-        if (!newRecords.isEmpty()) {
-          afterInsert(newRecords, newMap);
+      // -------------------- AFTER INSERT --------------------
+      if (context == CONTEXT_AFTER_INSERT) {
+        List<SObject> records = filterProcessedRecords(newList, context);
+        if (!records.isEmpty()) {
+          afterInsert(records, newMap);
         }
         return;
       }
 
-      if (CONTEXT_AFTER_UPDATE.equals(context)) {
-        List<SObject> newRecords = filterProcessedRecords(newList, context);
-        if (!newRecords.isEmpty()) {
+      // -------------------- AFTER UPDATE --------------------
+      if (context == CONTEXT_AFTER_UPDATE) {
+        List<SObject> records = filterProcessedRecords(newList, context);
+        if (!records.isEmpty()) {
           afterUpdate(
-            newRecords,
-            getFilteredOldRecords(newRecords, oldMap),
+            records,
+            getFilteredOldRecords(records, oldMap),
             newMap,
             oldMap
           );
@@ -122,23 +133,23 @@ public virtual class TriggerHandler {
         return;
       }
 
-      if (CONTEXT_AFTER_DELETE.equals(context)) {
-        List<SObject> oldRecords = filterProcessedRecords(oldList, context);
-        if (!oldRecords.isEmpty()) {
-          afterDelete(oldRecords, oldMap);
+      // -------------------- AFTER DELETE --------------------
+      if (context == CONTEXT_AFTER_DELETE) {
+        List<SObject> records = filterProcessedRecords(oldList, context);
+        if (!records.isEmpty()) {
+          afterDelete(records, oldMap);
         }
         return;
       }
 
-      if (CONTEXT_AFTER_UNDELETE.equals(context)) {
-        List<SObject> newRecords = filterProcessedRecords(newList, context);
-        if (!newRecords.isEmpty()) {
-          afterUndelete(newRecords, newMap);
+      // -------------------- AFTER UNDELETE --------------------
+      if (context == CONTEXT_AFTER_UNDELETE) {
+        List<SObject> records = filterProcessedRecords(newList, context);
+        if (!records.isEmpty()) {
+          afterUndelete(records, newMap);
         }
         return;
       }
-
-      logOnce('Unhandled context: ' + context);
     } catch (Exception e) {
       logError('Trigger error [' + objectName + ']: ' + e.getMessage(), e);
       throw e;
@@ -171,40 +182,25 @@ public virtual class TriggerHandler {
     if (triggerSettingsCache == null) {
       triggerSettingsCache = new Map<String, TriggerSetting__mdt>();
 
-      try {
-        for (
-          TriggerSetting__mdt setting : TriggerSetting__mdt.getAll().values()
-        ) {
-          if (String.isNotBlank(setting.ObjectName__c)) {
-            triggerSettingsCache.put(setting.ObjectName__c, setting);
-          }
+      for (
+        TriggerSetting__mdt setting : TriggerSetting__mdt.getAll().values()
+      ) {
+        if (String.isNotBlank(setting.ObjectName__c)) {
+          triggerSettingsCache.put(setting.ObjectName__c, setting);
         }
-      } catch (Exception e) {
-        System.debug(
-          LoggingLevel.ERROR,
-          'Error loading trigger settings: ' + e.getMessage()
-        );
-        triggerSettingsCache = new Map<String, TriggerSetting__mdt>();
       }
     }
   }
 
   private TriggerSetting__mdt getSetting() {
-    return (triggerSettingsCache != null &&
-      objectName != null)
+    return triggerSettingsCache != null
       ? triggerSettingsCache.get(objectName)
       : null;
   }
 
   private Boolean isTriggerActive() {
     TriggerSetting__mdt setting = getSetting();
-
-    if (setting == null) {
-      logOnce('Trigger disabled (no metadata): ' + objectName);
-      return false;
-    }
-
-    return setting.IsActive__c;
+    return setting != null && setting.IsActive__c;
   }
 
   private Boolean isContextEnabled(String context) {
@@ -216,12 +212,8 @@ public virtual class TriggerHandler {
     if (String.isBlank(fieldName))
       return true;
 
-    try {
-      Object val = setting.get(fieldName);
-      return (val instanceof Boolean) ? (Boolean) val : true;
-    } catch (Exception e) {
-      return true;
-    }
+    Object val = setting.get(fieldName);
+    return (val instanceof Boolean) ? (Boolean) val : true;
   }
 
   // -------------------- Recursion Control --------------------
@@ -234,30 +226,24 @@ public virtual class TriggerHandler {
     if (records == null || records.isEmpty())
       return result;
 
-    String handlerName = String.valueOf(this).split(':')[0];
     String key =
-      handlerName +
-      '_' +
+      'TriggerHandler_' +
       objectName +
       '_' +
       context +
       '_' +
-      Request.getCurrent().getRequestId();
+      String.valueOf(Datetime.now().getTime());
 
-    Set<Id> processed = processedRecords.get(key);
-    if (processed == null) {
-      processed = new Set<Id>();
-      processedRecords.put(key, processed);
+    if (!processedRecords.containsKey(key)) {
+      processedRecords.put(key, new Set<Id>());
     }
 
-    for (SObject rec : records) {
-      if (rec == null)
-        continue;
+    Set<Id> processed = processedRecords.get(key);
 
-      if (rec.Id == null || !processed.contains(rec.Id)) {
-        result.add(rec);
-        if (rec.Id != null)
-          processed.add(rec.Id);
+    for (SObject record : records) {
+      if (record.Id != null && !processed.contains(record.Id)) {
+        result.add(record);
+        processed.add(record.Id);
       }
     }
 
@@ -269,14 +255,10 @@ public virtual class TriggerHandler {
     Map<Id, SObject> oldMap
   ) {
     List<SObject> oldRecords = new List<SObject>();
-    if (newRecords == null || oldMap == null)
-      return oldRecords;
 
-    for (SObject rec : newRecords) {
-      if (rec != null && rec.Id != null) {
-        SObject oldRec = oldMap.get(rec.Id);
-        if (oldRec != null)
-          oldRecords.add(oldRec);
+    for (SObject record : newRecords) {
+      if (record.Id != null && oldMap.containsKey(record.Id)) {
+        oldRecords.add(oldMap.get(record.Id));
       }
     }
 
@@ -285,62 +267,44 @@ public virtual class TriggerHandler {
 
   // -------------------- Logging --------------------
 
-  private void logOnce(String msg) {
-    String handlerName = String.valueOf(this).split(':')[0];
-    String key =
-      handlerName +
-      '_' +
-      objectName +
-      '_' +
-      msg +
-      '_' +
-      Request.getCurrent().getRequestId();
+  private void logOnce(String message) {
+    String key = 'TriggerHandler_' + objectName + '_' + message;
 
     if (!loggedKeys.contains(key)) {
       loggedKeys.add(key);
-      System.debug(LoggingLevel.WARN, msg);
+      System.debug(LoggingLevel.WARN, message);
     }
   }
 
-  private void logError(String msg, Exception e) {
-    System.debug(LoggingLevel.ERROR, msg);
+  private void logError(String message, Exception e) {
+    System.debug(LoggingLevel.ERROR, message);
     System.debug(LoggingLevel.ERROR, e.getStackTraceString());
   }
 
   // -------------------- Bypass --------------------
 
   private Boolean isBypassed() {
-    return objectName != null && bypassedObjects.contains(objectName);
+    return bypassedObjects.contains(objectName);
   }
 
   public static void bypass(String objectName) {
-    if (objectName != null)
-      bypassedObjects.add(objectName);
+    bypassedObjects.add(objectName);
   }
 
   public static void clearBypass(String objectName) {
-    if (objectName != null)
-      bypassedObjects.remove(objectName);
+    bypassedObjects.remove(objectName);
   }
 
   public static void clearAllBypasses() {
     bypassedObjects.clear();
   }
 
-  @TestVisible
-  private static void resetAll() {
-    triggerSettingsCache = null;
-    bypassedObjects.clear();
-    processedRecords.clear();
-    loggedKeys.clear();
-  }
-
   // -------------------- Hooks --------------------
 
-  protected virtual void beforeInsert(List<SObject> newRecords) {
+  protected virtual void beforeInsert(List<SObject> records) {
   }
   protected virtual void afterInsert(
-    List<SObject> newRecords,
+    List<SObject> records,
     Map<Id, SObject> newMap
   ) {
   }
@@ -352,6 +316,7 @@ public virtual class TriggerHandler {
     Map<Id, SObject> oldMap
   ) {
   }
+
   protected virtual void afterUpdate(
     List<SObject> newRecords,
     List<SObject> oldRecords,
@@ -365,6 +330,7 @@ public virtual class TriggerHandler {
     Map<Id, SObject> oldMap
   ) {
   }
+
   protected virtual void afterDelete(
     List<SObject> oldRecords,
     Map<Id, SObject> oldMap
