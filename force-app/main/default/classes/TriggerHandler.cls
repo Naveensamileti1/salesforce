@@ -25,7 +25,8 @@ public virtual class TriggerHandler {
 
   private static Map<String, TriggerSetting__mdt> triggerSettingsCache;
   private static Set<String> bypassedObjects = new Set<String>();
-  private static Map<String, Set<Id>> processedRecords = new Map<String, Set<Id>>();
+  // Per-record recursion control: store processed keys of form object:context:recordId
+  private static Set<String> processedKeys = new Set<String>();
   private static Set<String> loggedKeys = new Set<String>();
 
   private String objectName;
@@ -226,32 +227,22 @@ public virtual class TriggerHandler {
     if (records == null || records.isEmpty())
       return result;
 
-    // Build a stable recursion key per-record: objectName:context:recordId
-    Id firstId = null;
-    for (SObject r : records) {
-      if (r != null && r.Id != null) {
-        firstId = r.Id;
-        break;
-      }
-    }
-    String key;
-    if (firstId != null) {
-      key = objectName + ':' + context + ':' + String.valueOf(firstId);
-    } else {
-      key = objectName + ':' + context + ':no-id';
-    }
-
-    if (!processedRecords.containsKey(key)) {
-      processedRecords.put(key, new Set<Id>());
-    }
-
-    Set<Id> processed = processedRecords.get(key);
-
+    // Per-record processed key approach (enterprise-grade):
     for (SObject record : records) {
-      if (record.Id != null && !processed.contains(record.Id)) {
-        result.add(record);
-        processed.add(record.Id);
+      if (record == null || record.Id == null) {
+        // Skip records without Id (e.g., before insert) — return all for beforeInsert caller
+        continue;
       }
+      String key = objectName + ':' + context + ':' + String.valueOf(record.Id);
+      if (!processedKeys.contains(key)) {
+        processedKeys.add(key);
+        result.add(record);
+      }
+    }
+
+    // If this is a context where records have no Id (before insert), return original list
+    if (context == CONTEXT_BEFORE_INSERT) {
+      return records;
     }
 
     return result;
