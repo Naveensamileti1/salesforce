@@ -14,12 +14,7 @@ public class AccountTriggerHandler extends TriggerHandler {
   protected override void beforeInsert(List<SObject> newRecords) {
     List<Account> newAccountList = getAccountList(newRecords);
 
-    for (Account accountRecord : newAccountList) {
-      // Example logic
-      if (String.isBlank(accountRecord.Name)) {
-        accountRecord.Name = 'Default Account Name';
-      }
-    }
+    duplicateSicValidation(newAccountList, null, null);
   }
 
   // -------------------- AFTER INSERT --------------------
@@ -50,23 +45,9 @@ public class AccountTriggerHandler extends TriggerHandler {
     List<Account> newAccountList = getAccountList(newRecords);
     List<Account> oldAccountList = getAccountList(oldRecords);
     Map<Id, Account> oldAccountMap = getAccountMap(oldRecordMap);
+    Map<Id, Account> newAccountMap = getAccountMap(newRecordMap);
 
-    for (Account newAccount : newAccountList) {
-      Account oldAccount = oldAccountMap.get(newAccount.Id);
-
-      if (oldAccount == null)
-        continue;
-
-      // Example: Name change detection
-      if (newAccount.Name != oldAccount.Name) {
-        System.debug(
-          'Account name changed from ' +
-            oldAccount.Name +
-            ' to ' +
-            newAccount.Name
-        );
-      }
-    }
+    duplicateSicValidation(newAccountList, oldAccountMap, newAccountMap);
   }
 
   // -------------------- AFTER UPDATE --------------------
@@ -121,11 +102,9 @@ public class AccountTriggerHandler extends TriggerHandler {
     Map<Id, SObject> newRecordMap
   ) {
     List<Account> restoredAccountList = getAccountList(newRecords);
+    Map<Id, Account> newAccountMap = getAccountMap(newRecordMap);
 
-    for (Account restoredAccount : restoredAccountList) {
-      // Example logic
-      System.debug('Restored Account Id: ' + restoredAccount.Id);
-    }
+    duplicateSicValidation(restoredAccountList, null, newAccountMap);
   }
 
   /**
@@ -168,6 +147,75 @@ public class AccountTriggerHandler extends TriggerHandler {
 
     if (!contactsList.isEmpty()) {
       update contactsList;
+    }
+  }
+
+  private void duplicateSicValidation(
+    List<Account> newList,
+    Map<Id, Account> oldMap,
+    Map<Id, Account> newMap
+  ) {
+    Set<String> sicCodes = new Set<String>();
+    Map<String, Integer> txnCountMap = new Map<String, Integer>();
+
+    // ---------------------------
+    // Step 1: Collect + count (only new/changed)
+    // ---------------------------
+    for (Account acc : newList) {
+      Account oldAcc = (oldMap != null) ? oldMap.get(acc.Id) : null;
+
+      if (String.isBlank(acc.Sic))
+        continue;
+
+      // Only validate when new or changed
+      if (oldAcc == null || acc.Sic != oldAcc.Sic) {
+        sicCodes.add(acc.Sic);
+
+        // Count duplicates in same transaction
+        txnCountMap.put(
+          acc.Sic,
+          txnCountMap.containsKey(acc.Sic)
+            ? txnCountMap.get(acc.Sic) + 1
+            : 1
+        );
+      }
+    }
+
+    if (sicCodes.isEmpty())
+      return;
+
+    // ---------------------------
+    // Step 2: Check DB duplicates (exclude self)
+    // ---------------------------
+    Set<String> duplicateFromDB = new Set<String>();
+
+    for (AggregateResult ar : [
+      SELECT Sic sic, COUNT(Id) cnt
+      FROM Account
+      WHERE Sic IN :sicCodes AND Id NOT IN :newMap.keySet()
+      GROUP BY Sic
+    ]) {
+      if ((Integer) ar.get('cnt') > 0) {
+        duplicateFromDB.add((String) ar.get('sic'));
+      }
+    }
+
+    // ---------------------------
+    // Step 3: Final validation
+    // ---------------------------
+    for (Account acc : newList) {
+      if (String.isBlank(acc.Sic))
+        continue;
+
+      Boolean isTxnDuplicate =
+        txnCountMap.containsKey(acc.Sic) &&
+        txnCountMap.get(acc.Sic) > 1;
+
+      Boolean isDbDuplicate = duplicateFromDB.contains(acc.Sic);
+
+      if (isTxnDuplicate || isDbDuplicate) {
+        acc.addError('Duplicate SIC Code not allowed: ' + acc.Sic);
+      }
     }
   }
 }
