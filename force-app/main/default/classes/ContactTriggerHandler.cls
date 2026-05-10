@@ -32,6 +32,7 @@ public class ContactTriggerHandler extends TriggerHandler {
     Map<Id, Contact> newContactMap = getContactMap(newRecordMap);
 
     numberOfContactsPerAccount(newContactList, null, newContactMap, null);
+    rollUpAmountFromContactsToAccount(newContactList, null, null);
   }
 
   // -------------------- BEFORE UPDATE --------------------
@@ -85,6 +86,11 @@ public class ContactTriggerHandler extends TriggerHandler {
       newContactMap,
       oldContactMap
     );
+    rollUpAmountFromContactsToAccount(
+      newContactList,
+      oldContactList,
+      oldContactMap
+    );
   }
 
   // -------------------- BEFORE DELETE --------------------
@@ -117,6 +123,7 @@ public class ContactTriggerHandler extends TriggerHandler {
     List<Contact> oldContactList = getContactList(oldRecords);
     Map<Id, Contact> oldContactMap = getContactMap(oldRecordMap);
     numberOfContactsPerAccount(null, oldContactList, null, oldContactMap);
+    rollUpAmountFromContactsToAccount(null, oldContactList, oldContactMap);
   }
 
   // -------------------- AFTER UNDELETE --------------------
@@ -129,6 +136,7 @@ public class ContactTriggerHandler extends TriggerHandler {
     Map<Id, Contact> newContactMap = getContactMap(newRecordMap);
 
     numberOfContactsPerAccount(restoredContactList, null, newContactMap, null);
+    rollUpAmountFromContactsToAccount(restoredContactList, null, null);
   }
 
   private void syncAccountDescriptionFromContacts(
@@ -266,6 +274,125 @@ public class ContactTriggerHandler extends TriggerHandler {
     // ---------------------------
     if (!accountsToUpdate.isEmpty()) {
       update accountsToUpdate;
+    }
+  }
+
+  private void rollUpAmountFromContactsToAccount(
+    List<Contact> newList,
+    List<Contact> oldList,
+    Map<Id, Contact> oldMap
+  ) {
+    Set<Id> accountIds = new Set<Id>();
+
+    // -----------------------------------
+    // INSERT / UPDATE / UNDELETE
+    // -----------------------------------
+    if (newList != null) {
+      for (Contact con : newList) {
+        Contact oldCon = (oldMap != null) ? oldMap.get(con.Id) : null;
+
+        // INSERT / UNDELETE
+        if (oldCon == null) {
+          if (con.AccountId != null) {
+            accountIds.add(con.AccountId);
+          }
+        }
+        // UPDATE
+        else if (
+          oldCon.Amount__c != con.Amount__c ||
+          oldCon.AccountId != con.AccountId
+        ) {
+          // New Account
+          if (con.AccountId != null) {
+            accountIds.add(con.AccountId);
+          }
+
+          // Old Account
+          if (oldCon.AccountId != null) {
+            accountIds.add(oldCon.AccountId);
+          }
+        }
+      }
+    }
+
+    // -----------------------------------
+    // DELETE
+    // -----------------------------------
+    if (oldList != null) {
+      for (Contact con : oldList) {
+        if (con.AccountId != null) {
+          accountIds.add(con.AccountId);
+        }
+      }
+    }
+
+    // Nothing to process
+    if (accountIds.isEmpty()) {
+      return;
+    }
+
+    // -----------------------------------
+    // Initialize totals with zero
+    // -----------------------------------
+    Map<Id, Decimal> accountTotals = new Map<Id, Decimal>();
+
+    for (Id accId : accountIds) {
+      accountTotals.put(accId, 0);
+    }
+
+    // -----------------------------------
+    // Aggregate Contact Amounts
+    // -----------------------------------
+    for (AggregateResult ar : [
+      SELECT AccountId, SUM(Amount__c) total
+      FROM Contact
+      WHERE AccountId IN :accountIds
+      GROUP BY AccountId
+    ]) {
+      Decimal total = (Decimal) ar.get('total');
+
+      accountTotals.put((Id) ar.get('AccountId'), total != null ? total : 0);
+    }
+
+    // -----------------------------------
+    // Query existing Account totals
+    // -----------------------------------
+    Map<Id, Account> existingAccounts = new Map<Id, Account>(
+      [
+        SELECT Id, Total_Roll_Up_Amount__c
+        FROM Account
+        WHERE Id IN :accountTotals.keySet()
+      ]
+    );
+
+    // -----------------------------------
+    // Prepare update list
+    // Only update if value changed
+    // -----------------------------------
+    List<Account> accountUpdateList = new List<Account>();
+
+    for (Id accId : accountTotals.keySet()) {
+      Decimal newTotal = accountTotals.get(accId);
+
+      Decimal oldTotal = existingAccounts.containsKey(accId)
+        ? existingAccounts.get(accId).Total_Roll_Up_Amount__c
+        : 0;
+
+      oldTotal = oldTotal != null ? oldTotal : 0;
+
+      // Skip unnecessary DML
+      if (newTotal != oldTotal) {
+        accountUpdateList.add(
+          new Account(Id = accId, Total_Roll_Up_Amount__c = newTotal)
+        );
+      }
+    }
+
+    // -----------------------------------
+    // Update Accounts
+    // -----------------------------------
+    if (!accountUpdateList.isEmpty()) {
+      update accountUpdateList;
     }
   }
 }
