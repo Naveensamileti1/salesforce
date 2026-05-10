@@ -1,52 +1,53 @@
 public virtual class TriggerHandler {
-  // -------------------- Context constants --------------------
+  // -----------------------------------
+  // Context → Metadata Mapping
+  // -----------------------------------
 
-  private static final String CONTEXT_BEFORE_INSERT = 'beforeInsert';
-  private static final String CONTEXT_BEFORE_UPDATE = 'beforeUpdate';
-  private static final String CONTEXT_BEFORE_DELETE = 'beforeDelete';
-  private static final String CONTEXT_AFTER_INSERT = 'afterInsert';
-  private static final String CONTEXT_AFTER_UPDATE = 'afterUpdate';
-  private static final String CONTEXT_AFTER_DELETE = 'afterDelete';
-  private static final String CONTEXT_AFTER_UNDELETE = 'afterUndelete';
-
-  // -------------------- Context → Metadata Mapping --------------------
-
-  private static final Map<String, String> CONTEXT_FIELD_MAP = new Map<String, String>{
-    CONTEXT_BEFORE_INSERT => 'RunBeforeInsert__c',
-    CONTEXT_BEFORE_UPDATE => 'RunBeforeUpdate__c',
-    CONTEXT_BEFORE_DELETE => 'RunBeforeDelete__c',
-    CONTEXT_AFTER_INSERT => 'RunAfterInsert__c',
-    CONTEXT_AFTER_UPDATE => 'RunAfterUpdate__c',
-    CONTEXT_AFTER_DELETE => 'RunAfterDelete__c',
-    CONTEXT_AFTER_UNDELETE => 'RunAfterUndelete__c'
+  private static final Map<System.TriggerOperation, String> CONTEXT_FIELD_MAP = new Map<System.TriggerOperation, String>{
+    System.TriggerOperation.BEFORE_INSERT => 'RunBeforeInsert__c',
+    System.TriggerOperation.BEFORE_UPDATE => 'RunBeforeUpdate__c',
+    System.TriggerOperation.BEFORE_DELETE => 'RunBeforeDelete__c',
+    System.TriggerOperation.AFTER_INSERT => 'RunAfterInsert__c',
+    System.TriggerOperation.AFTER_UPDATE => 'RunAfterUpdate__c',
+    System.TriggerOperation.AFTER_DELETE => 'RunAfterDelete__c',
+    System.TriggerOperation.AFTER_UNDELETE => 'RunAfterUndelete__c'
   };
 
-  // -------------------- Static State --------------------
+  // -----------------------------------
+  // Static State
+  // -----------------------------------
 
   private static Map<String, TriggerSetting__mdt> triggerSettingsCache;
+
   private static Set<String> bypassedObjects = new Set<String>();
+
   private static Map<String, Set<Id>> processedByContext = new Map<String, Set<Id>>();
+
   private static Set<String> loggedKeys = new Set<String>();
 
   private String objectName;
 
-  // -------------------- Constructor --------------------
+  // -----------------------------------
+  // Constructor
+  // -----------------------------------
 
   public TriggerHandler() {
-    if (Trigger.isExecuting) {
-      // FIXED: proper safe describe-based object detection
-      objectName = Trigger.new != null && !Trigger.new.isEmpty()
-        ? Trigger.new[0].getSObjectType().getDescribe().getName()
-        : Trigger.old[0].getSObjectType().getDescribe().getName();
+    if (!Trigger.isExecuting) {
+      return;
+    }
+
+    if (Trigger.new != null && !Trigger.new.isEmpty()) {
+      objectName = Trigger.new[0].getSObjectType().getDescribe().getName();
+    } else if (Trigger.old != null && !Trigger.old.isEmpty()) {
+      objectName = Trigger.old[0].getSObjectType().getDescribe().getName();
     }
 
     loadTriggerSettings();
-
-    // Safety reset per transaction
-    processedByContext.clear();
   }
 
-  // -------------------- Entry Point --------------------
+  // -----------------------------------
+  // Entry Point
+  // -----------------------------------
 
   public void run() {
     if (!Trigger.isExecuting || String.isBlank(objectName)) {
@@ -54,6 +55,7 @@ public virtual class TriggerHandler {
         LoggingLevel.WARN,
         'TriggerHandler executed outside trigger'
       );
+
       return;
     }
 
@@ -62,122 +64,115 @@ public virtual class TriggerHandler {
     }
 
     try {
-      String context = getCurrentContext();
+      System.TriggerOperation context = Trigger.operationType;
 
       if (context == null || !isContextEnabled(context)) {
-        logOnce('Disabled/unknown context: ' + context);
+        logOnce('Disabled/unknown context: ' + String.valueOf(context));
+
         return;
       }
 
       List<SObject> newList = Trigger.new != null
         ? Trigger.new
         : new List<SObject>();
+
       List<SObject> oldList = Trigger.old != null
         ? Trigger.old
         : new List<SObject>();
+
       Map<Id, SObject> newMap = Trigger.newMap != null
         ? Trigger.newMap
         : new Map<Id, SObject>();
+
       Map<Id, SObject> oldMap = Trigger.oldMap != null
         ? Trigger.oldMap
         : new Map<Id, SObject>();
 
-      // -------------------- BEFORE INSERT --------------------
-      if (context == CONTEXT_BEFORE_INSERT) {
-        beforeInsert(newList);
-        return;
-      }
+      // -----------------------------------
+      // Trigger Context Routing
+      // -----------------------------------
 
-      // -------------------- BEFORE UPDATE --------------------
-      if (context == CONTEXT_BEFORE_UPDATE) {
-        List<SObject> records = filterProcessedRecords(newList, context);
-        if (!records.isEmpty()) {
-          beforeUpdate(
-            records,
-            getFilteredOldRecords(records, oldMap),
-            newMap,
-            oldMap
-          );
-        }
-        return;
-      }
+      switch on context {
+        // ---------------- BEFORE INSERT ----------------
 
-      // -------------------- BEFORE DELETE --------------------
-      if (context == CONTEXT_BEFORE_DELETE) {
-        List<SObject> records = filterProcessedRecords(oldList, context);
-        if (!records.isEmpty()) {
-          beforeDelete(records, oldMap);
+        when BEFORE_INSERT {
+          beforeInsert(newList);
         }
-        return;
-      }
+        // ---------------- BEFORE UPDATE ----------------
 
-      // -------------------- AFTER INSERT --------------------
-      if (context == CONTEXT_AFTER_INSERT) {
-        List<SObject> records = filterProcessedRecords(newList, context);
-        if (!records.isEmpty()) {
-          afterInsert(records, newMap);
-        }
-        return;
-      }
+        when BEFORE_UPDATE {
+          List<SObject> records = filterProcessedRecords(newList, context);
 
-      // -------------------- AFTER UPDATE --------------------
-      if (context == CONTEXT_AFTER_UPDATE) {
-        List<SObject> records = filterProcessedRecords(newList, context);
-        if (!records.isEmpty()) {
-          afterUpdate(
-            records,
-            getFilteredOldRecords(records, oldMap),
-            newMap,
-            oldMap
-          );
+          if (!records.isEmpty()) {
+            beforeUpdate(
+              records,
+              getFilteredOldRecords(records, oldMap),
+              newMap,
+              oldMap
+            );
+          }
         }
-        return;
-      }
+        // ---------------- BEFORE DELETE ----------------
 
-      // -------------------- AFTER DELETE --------------------
-      if (context == CONTEXT_AFTER_DELETE) {
-        List<SObject> records = filterProcessedRecords(oldList, context);
-        if (!records.isEmpty()) {
-          afterDelete(records, oldMap);
-        }
-        return;
-      }
+        when BEFORE_DELETE {
+          List<SObject> records = filterProcessedRecords(oldList, context);
 
-      // -------------------- AFTER UNDELETE --------------------
-      if (context == CONTEXT_AFTER_UNDELETE) {
-        List<SObject> records = filterProcessedRecords(newList, context);
-        if (!records.isEmpty()) {
-          afterUndelete(records, newMap);
+          if (!records.isEmpty()) {
+            beforeDelete(records, oldMap);
+          }
         }
-        return;
+        // ---------------- AFTER INSERT ----------------
+
+        when AFTER_INSERT {
+          List<SObject> records = filterProcessedRecords(newList, context);
+
+          if (!records.isEmpty()) {
+            afterInsert(records, newMap);
+          }
+        }
+        // ---------------- AFTER UPDATE ----------------
+
+        when AFTER_UPDATE {
+          List<SObject> records = filterProcessedRecords(newList, context);
+
+          if (!records.isEmpty()) {
+            afterUpdate(
+              records,
+              getFilteredOldRecords(records, oldMap),
+              newMap,
+              oldMap
+            );
+          }
+        }
+        // ---------------- AFTER DELETE ----------------
+
+        when AFTER_DELETE {
+          List<SObject> records = filterProcessedRecords(oldList, context);
+
+          if (!records.isEmpty()) {
+            afterDelete(records, oldMap);
+          }
+        }
+        // ---------------- AFTER UNDELETE ----------------
+
+        when AFTER_UNDELETE {
+          List<SObject> records = filterProcessedRecords(newList, context);
+
+          if (!records.isEmpty()) {
+            afterUndelete(records, newMap);
+          }
+        }
       }
     } catch (Exception e) {
       logError('Trigger error [' + objectName + ']: ' + e.getMessage(), e);
+
       throw e;
     }
   }
 
-  // -------------------- Context Resolver --------------------
-
-  private String getCurrentContext() {
-    if (Trigger.isBefore && Trigger.isInsert)
-      return CONTEXT_BEFORE_INSERT;
-    if (Trigger.isBefore && Trigger.isUpdate)
-      return CONTEXT_BEFORE_UPDATE;
-    if (Trigger.isBefore && Trigger.isDelete)
-      return CONTEXT_BEFORE_DELETE;
-    if (Trigger.isAfter && Trigger.isInsert)
-      return CONTEXT_AFTER_INSERT;
-    if (Trigger.isAfter && Trigger.isUpdate)
-      return CONTEXT_AFTER_UPDATE;
-    if (Trigger.isAfter && Trigger.isDelete)
-      return CONTEXT_AFTER_DELETE;
-    if (Trigger.isAfter && Trigger.isUndelete)
-      return CONTEXT_AFTER_UNDELETE;
-    return null;
-  }
-
-  // -------------------- Metadata --------------------
+  // -----------------------------------
+  // Metadata
+  // -----------------------------------
 
   private static void loadTriggerSettings() {
     if (triggerSettingsCache == null) {
@@ -201,48 +196,63 @@ public virtual class TriggerHandler {
 
   private Boolean isTriggerActive() {
     TriggerSetting__mdt setting = getSetting();
-    return setting != null && setting.IsActive__c;
+
+    return setting != null || setting.IsActive__c;
   }
 
-  private Boolean isContextEnabled(String context) {
+  private Boolean isContextEnabled(System.TriggerOperation context) {
     TriggerSetting__mdt setting = getSetting();
-    if (setting == null)
+
+    if (setting == null) {
       return true;
+    }
 
     String fieldName = CONTEXT_FIELD_MAP.get(context);
-    if (String.isBlank(fieldName))
+
+    if (String.isBlank(fieldName)) {
       return true;
+    }
 
     Object val = setting.get(fieldName);
+
     return (val instanceof Boolean) ? (Boolean) val : true;
   }
 
-  // -------------------- Recursion Control --------------------
+  // -----------------------------------
+  // Recursion Control
+  // -----------------------------------
 
   private List<SObject> filterProcessedRecords(
     List<SObject> records,
-    String context
+    System.TriggerOperation context
   ) {
     List<SObject> result = new List<SObject>();
-    if (records == null || records.isEmpty())
-      return result;
 
-    if (context == CONTEXT_BEFORE_INSERT) {
+    if (records == null || records.isEmpty()) {
+      return result;
+    }
+
+    // BEFORE INSERT has no IDs yet
+    if (context == System.TriggerOperation.BEFORE_INSERT) {
       return records;
     }
 
-    if (!processedByContext.containsKey(context)) {
-      processedByContext.put(context, new Set<Id>());
+    String contextKey = objectName + '_' + String.valueOf(context);
+
+    if (!processedByContext.containsKey(contextKey)) {
+      processedByContext.put(contextKey, new Set<Id>());
     }
 
-    Set<Id> processedIds = processedByContext.get(context);
+    Set<Id> processedIds = processedByContext.get(contextKey);
 
     for (SObject record : records) {
-      if (record == null || record.Id == null)
+      if (record == null || record.Id == null) {
         continue;
+      }
 
       if (!processedIds.contains(record.Id)) {
         processedIds.add(record.Id);
+
         result.add(record);
       }
     }
@@ -256,6 +266,10 @@ public virtual class TriggerHandler {
   ) {
     List<SObject> oldRecords = new List<SObject>();
 
+    if (newRecords == null || oldMap == null) {
+      return oldRecords;
+    }
+
     for (SObject record : newRecords) {
       if (record.Id != null && oldMap.containsKey(record.Id)) {
         oldRecords.add(oldMap.get(record.Id));
@@ -265,23 +279,29 @@ public virtual class TriggerHandler {
     return oldRecords;
   }
 
-  // -------------------- Logging --------------------
+  // -----------------------------------
+  // Logging
+  // -----------------------------------
 
   private void logOnce(String message) {
     String key = 'TriggerHandler_' + objectName + '_' + message;
 
     if (!loggedKeys.contains(key)) {
       loggedKeys.add(key);
+
       System.debug(LoggingLevel.WARN, message);
     }
   }
 
   private void logError(String message, Exception e) {
     System.debug(LoggingLevel.ERROR, message);
+
     System.debug(LoggingLevel.ERROR, e.getStackTraceString());
   }
 
-  // -------------------- Bypass --------------------
+  // -----------------------------------
+  // Bypass
+  // -----------------------------------
 
   private Boolean isBypassed() {
     return bypassedObjects.contains(objectName);
@@ -299,10 +319,13 @@ public virtual class TriggerHandler {
     bypassedObjects.clear();
   }
 
-  // -------------------- Hooks --------------------
+  // -----------------------------------
+  // Hooks
+  // -----------------------------------
 
   protected virtual void beforeInsert(List<SObject> records) {
   }
+
   protected virtual void afterInsert(
     List<SObject> records,
     Map<Id, SObject> newMap
