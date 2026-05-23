@@ -1,5 +1,6 @@
 public class AccountTriggerHandler extends TriggerHandler {
   // -------------------- Type Helpers --------------------
+  private static final String STALE_OPP_MESSAGE = 'Please review this opportunity it is not closed after 30 days';
 
   private List<Account> getAccountList(List<SObject> records) {
     return (List<Account>) records;
@@ -63,6 +64,10 @@ public class AccountTriggerHandler extends TriggerHandler {
     Map<Id, Account> oldAccountMap = getAccountMap(oldRecordMap);
 
     updateContactPhoneFromAccount(newAccountMap, oldAccountMap);
+
+    // Populate stale opportunity suggestion when Account Rating changes.
+    // Use oldAccountMap to detect changes.
+    populateStaleOpportunitySuggestion(newAccountList, oldAccountMap);
   }
 
   // -------------------- BEFORE DELETE --------------------
@@ -174,9 +179,7 @@ public class AccountTriggerHandler extends TriggerHandler {
         // Count duplicates in same transaction
         txnCountMap.put(
           acc.Sic,
-          txnCountMap.containsKey(acc.Sic)
-            ? txnCountMap.get(acc.Sic) + 1
-            : 1
+          txnCountMap.containsKey(acc.Sic) ? txnCountMap.get(acc.Sic) + 1 : 1
         );
       }
     }
@@ -208,13 +211,83 @@ public class AccountTriggerHandler extends TriggerHandler {
         continue;
 
       Boolean isTxnDuplicate =
-        txnCountMap.containsKey(acc.Sic) &&
-        txnCountMap.get(acc.Sic) > 1;
+        txnCountMap.containsKey(acc.Sic) && txnCountMap.get(acc.Sic) > 1;
 
       Boolean isDbDuplicate = duplicateFromDB.contains(acc.Sic);
 
       if (isTxnDuplicate || isDbDuplicate) {
         acc.addError('Duplicate SIC Code not allowed: ' + acc.Sic);
+      }
+    }
+  }
+
+  private void populateStaleOpportunitySuggestion(
+    List<Account> newList,
+    Map<Id, Account> oldMap
+  ) {
+    Set<Id> accountIds = new Set<Id>();
+
+    for (Account acc : newList) {
+      Account oldAcc = oldMap != null ? oldMap.get(acc.Id) : null;
+
+      if (oldAcc != null && acc.Rating != oldAcc.Rating) {
+        accountIds.add(acc.Id);
+      }
+    }
+
+    if (accountIds.isEmpty()) {
+      return;
+    }
+    
+    List<Opportunity> oppsToUpdate = [
+      SELECT Id, Description, AccountId, LastActivityDate, CreatedDate, IsClosed
+      FROM Opportunity
+      WHERE
+        AccountId IN :accountIds
+        AND IsClosed = false
+        AND (LastActivityDate = NULL OR LastActivityDate < :Date.today().addDays(-30))
+    ];
+
+    if (oppsToUpdate.isEmpty()) {
+      return;
+    }
+
+    List<Opportunity> updates = new List<Opportunity>();
+    String messageLower = STALE_OPP_MESSAGE.toLowerCase();
+ 
+    for (Opportunity opp : oppsToUpdate) {
+      String existingDesc = opp.Description == null ? '' : opp.Description;
+      // Perform lowercase conversion only once per opportunity description when needed.
+      Boolean containsMessage = false;
+      if (existingDesc != '') {
+        String existingDescLower = existingDesc.toLowerCase();
+        containsMessage = existingDescLower.contains(messageLower);
+      }
+      if (!containsMessage) {
+        Opportunity u = new Opportunity(Id = opp.Id);
+        u.Description = (existingDesc == '' ? '' : existingDesc + '\n') + STALE_OPP_MESSAGE;
+        updates.add(u);
+      }
+    }
+
+    if (updates.isEmpty()) {
+      return;
+    }
+
+    // Perform update in a single partial-save call but process results to log failures.
+    Database.SaveResult[] results = Database.update(updates, false);
+    for (Integer i = 0; i < results.size(); i++) {
+      if (!results[i].isSuccess()) {
+        // Log error to debug for administrators/CI. Do not throw in trigger context.
+        Database.Error err = results[i].getErrors()[0];
+        System.debug(
+          'populateStaleOpportunitySuggestion: Failed to update Opportunity Id=' +
+            updates[i].Id +
+            ' error=' +
+            err.getStatusCode() +
+            ' message=' +
+            err.getMessage()
+        );
       }
     }
   }
