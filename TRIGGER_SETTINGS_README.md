@@ -43,26 +43,27 @@ If you have the "Markdown Preview Mermaid Support" extension (bierner.markdown-m
 
 ```mermaid
 flowchart TD
-  A[Trigger fires] --> B[Instantiate Handler<br/>new XTriggerHandler().run()]
-  B --> C{Determine Object Name}
-  C -->|Trigger.new != null| C1[Trigger.new[0].getSObjectType().getDescribe().getName()]
-  C -->|else| C2[Trigger.old[0].getSObjectType().getDescribe().getName()]
-  C1 --> D[loadTriggerSettings() — lazy init cache from TriggerSetting__mdt.getAll()]
+  A["Trigger fires"] --> B["Instantiate Handler"]
+  B --> B2["Calls: new XTriggerHandler().run()"]
+  B2 --> C{"Determine Object Name"}
+  C -->|Trigger.new != null| C1["Trigger.new[0].getSObjectType().getDescribe().getName()"]
+  C -->|else| C2["Trigger.old[0].getSObjectType().getDescribe().getName()"]
+  C1 --> D["loadTriggerSettings() - lazy init cache from TriggerSetting__mdt.getAll()"]
   C2 --> D
-  D --> E{isBypassed()?}
-  E -- yes --> Z[Exit (bypassed)]
-  E -- no --> F{isTriggerActive()?}
-  F -- false --> Z2[Exit (trigger inactive per metadata)]
-  F -- true --> G{isContextEnabled(context)?}
-  G -- false --> Z3[Exit (context disabled)]
-  G -- true --> H[Prepare records & maps<br/>newList, oldList, newMap, oldMap]
-  H --> I[filterProcessedRecords(records, context)]
-  I --> J{records empty?}
-  J -- yes --> Z4[Exit (no unprocessed records)]
-  J -- no --> K[Dispatch to hook method<br/>before/after insert/update/delete/undelete]
-  K --> L[Handler implementation runs]
-  L --> M[If exceptions → logError & rethrow]
-  M --> N[End]
+  D --> E{"isBypassed()?"}
+  E -- yes --> Z["Exit (bypassed)"]
+  E -- no --> F{"isTriggerActive()?"}
+  F -- false --> Z2["Exit (trigger inactive per metadata)"]
+  F -- true --> G{"isContextEnabled(context)?"}
+  G -- false --> Z3["Exit (context disabled)"]
+  G -- true --> H["Prepare records & maps\nnewList, oldList, newMap, oldMap"]
+  H --> I["filterProcessedRecords(records, context)"]
+  I --> J{"records empty?"}
+  J -- yes --> Z4["Exit (no unprocessed records)"]
+  J -- no --> K["Dispatch to hook method\nbefore/after insert/update/delete/undelete"]
+  K --> L["Handler implementation runs"]
+  L --> M["If exceptions -> logError & rethrow"]
+  M --> N["End"]
 ```
 
 (If the Mermaid doesn't render: open the .mmd file and try the Mermaid extension's preview command — steps provided below.)
