@@ -31,6 +31,7 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
     public String htmlBody;
 
     public Map<String, String> headers;
+    public String messageId;
 
     // Salesforce Data
     public Id caseId;
@@ -45,6 +46,9 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
 
     // Runtime Object
     public Case caseRecord;
+
+    // Flags
+    public Boolean isDuplicateEmail = false;
   }
 
   // ===========================================================================
@@ -78,14 +82,22 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
       // Step 6
       createEmailMessage(wrapper);
 
-      // Step 7
-      handleAttachments(wrapper);
+      // Step 7 - Only process attachments if not a duplicate email
+      if (!wrapper.isDuplicateEmail) {
+        handleAttachments(wrapper);
+      }
 
       result.success = true;
     } catch (Exception ex) {
       result.success = false;
 
-      System.debug('Inbound Email Error: ' + ex.getMessage());
+      System.debug(
+        LoggingLevel.ERROR,
+        'Inbound Email Error: ' +
+          ex.getMessage() +
+          '\n' +
+          ex.getStackTraceString()
+      );
     }
 
     return result;
@@ -113,7 +125,7 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
 
     // bccAddresses omitted (not supported for EmailMessage in this org)
 
-        // Safety: trim, truncate to 255 chars and escape single quotes.
+    // Safety: trim and truncate values
     String rawSubject = String.isNotBlank(email.subject)
       ? email.subject.trim()
       : 'No Subject';
@@ -126,15 +138,12 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
       ? email.htmlBody.trim()
       : null;
 
-    // Truncate to 255 and escape single quotes
-    wrapper.subject = rawSubject != null ? truncate(rawSubject, 255) : rawSubject;
-    if (wrapper.subject != null) wrapper.subject = String.escapeSingleQuotes(wrapper.subject);
+    // Truncate subject to 255, bodies to 32000
+    wrapper.subject = rawSubject != null ? rawSubject.left(255) : rawSubject;
 
-    wrapper.plainTextBody = rawPlain != null ? truncate(rawPlain, 255) : null;
-    if (wrapper.plainTextBody != null) wrapper.plainTextBody = String.escapeSingleQuotes(wrapper.plainTextBody);
+    wrapper.plainTextBody = rawPlain != null ? rawPlain.left(32000) : null;
 
-    wrapper.htmlBody = rawHtml != null ? truncate(rawHtml, 255) : null;
-    if (wrapper.htmlBody != null) wrapper.htmlBody = String.escapeSingleQuotes(wrapper.htmlBody);
+    wrapper.htmlBody = rawHtml != null ? rawHtml.left(32000) : null;
 
     // Convert headers list (if present) into a Map<String,String>
     wrapper.headers = new Map<String, String>();
@@ -142,6 +151,11 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
       for (Messaging.InboundEmail.Header h : email.headers) {
         if (h != null && h.name != null) {
           wrapper.headers.put(h.name, h.value);
+
+          // Capture Message-ID for duplicate detection
+          if (h.name.equalsIgnoreCase('Message-ID')) {
+            wrapper.messageId = h.value;
+          }
         }
       }
     }
@@ -163,12 +177,27 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
 
   private void extractExistingCase(EmailContextWrapper wrapper) {
     // Use the cross-org-safe helper only.
-    wrapper.caseId =
-      EmailMessages.getRecordIdFromEmail(
-        wrapper.subject,
-        wrapper.plainTextBody,
-        wrapper.htmlBody
-      );
+    wrapper.caseId = EmailMessages.getRecordIdFromEmail(
+      wrapper.subject,
+      wrapper.plainTextBody,
+      wrapper.htmlBody
+    );
+
+    // Validate the threaded Case still exists and cache the record
+    if (wrapper.caseId != null) {
+      List<Case> cases = [
+        SELECT Id
+        FROM Case
+        WHERE Id = :wrapper.caseId
+        LIMIT 1
+      ];
+
+      if (cases.isEmpty()) {
+        wrapper.caseId = null;
+      } else {
+        wrapper.caseRecord = cases[0];
+      }
+    }
   }
 
   // ===========================================================================
@@ -203,13 +232,13 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
         continue;
       }
 
-      String routingEmail = routing.Support_Queue_Email__c.toLowerCase();
+      String routingEmail = normalizeEmail(routing.Support_Queue_Email__c);
 
       Boolean matched = false;
 
       // Check TO Addresses
       for (String toEmail : wrapper.toAddresses) {
-        if (toEmail != null && toEmail.toLowerCase() == routingEmail) {
+        if (toEmail != null && normalizeEmail(toEmail) == routingEmail) {
           matched = true;
           break;
         }
@@ -218,7 +247,7 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
       // Check CC Addresses
       if (!matched) {
         for (String ccEmail : wrapper.ccAddresses) {
-          if (ccEmail != null && ccEmail.toLowerCase() == routingEmail) {
+          if (ccEmail != null && normalizeEmail(ccEmail) == routingEmail) {
             matched = true;
             break;
           }
@@ -242,10 +271,13 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
       return;
     }
 
+    String senderEmail = normalizeEmail(wrapper.fromAddress);
+
+    // Salesforce Email fields are case-insensitive by default
     List<Contact> contacts = [
-      SELECT Id, AccountId, Email
+      SELECT Id, AccountId
       FROM Contact
-      WHERE Email = :wrapper.fromAddress
+      WHERE Email = :senderEmail
       LIMIT 1
     ];
 
@@ -265,13 +297,9 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
   private Case createOrUpdateCase(EmailContextWrapper wrapper) {
     Case caseRecord;
 
-    // Existing Case
-    if (wrapper.caseId != null) {
-      caseRecord = new Case(Id = wrapper.caseId);
-
-      caseRecord.Description = wrapper.plainTextBody;
-
-      update caseRecord;
+    // Existing Case - use cached record, do not overwrite Description
+    if (wrapper.caseRecord != null) {
+      return wrapper.caseRecord;
     }
     // New Case
     else {
@@ -304,6 +332,21 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
   // ===========================================================================
 
   private void createEmailMessage(EmailContextWrapper wrapper) {
+    // Check for duplicate using Message-ID (globally, not per-Case)
+    if (String.isNotBlank(wrapper.messageId)) {
+      Integer existingCount = [
+        SELECT COUNT()
+        FROM EmailMessage
+        WHERE MessageIdentifier = :wrapper.messageId
+      ];
+
+      if (existingCount > 0) {
+        // Duplicate email, skip creation and flag to prevent duplicate attachments
+        wrapper.isDuplicateEmail = true;
+        return;
+      }
+    }
+
     EmailMessage emailMessage = new EmailMessage();
 
     emailMessage.ParentId = wrapper.caseId;
@@ -330,6 +373,11 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
 
     emailMessage.HtmlBody = wrapper.htmlBody;
 
+    // Note: MessageIdentifier may be read-only in some orgs/API versions
+    // If deployment fails with "Field is not writeable: EmailMessage.MessageIdentifier",
+    // remove this line. Duplicate check will still work if Salesforce auto-populates it.
+    emailMessage.MessageIdentifier = wrapper.messageId;
+
     insert emailMessage;
   }
 
@@ -339,6 +387,9 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
 
   private void handleAttachments(EmailContextWrapper wrapper) {
     List<ContentVersion> versions = new List<ContentVersion>();
+
+    Integer totalBytes = 0;
+    final Integer MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024; // Custom 20MB limit
 
     // -------------------------------------------------------------------------
     // Binary Attachments
@@ -351,15 +402,31 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
         continue;
       }
 
+      // Check attachment size limit
+      Integer attSize = att.body.size();
+      if (totalBytes + attSize > MAX_TOTAL_ATTACHMENT_BYTES) {
+        System.debug(
+          LoggingLevel.WARN,
+          'Attachment size limit exceeded. Skipping remaining attachments.'
+        );
+        break;
+      }
+
+      totalBytes += attSize;
+
       ContentVersion cv = new ContentVersion();
 
-      cv.Title = String.isNotBlank(att.fileName)
+      // Truncate filename to 255 characters
+      String fileName = String.isNotBlank(att.fileName)
         ? att.fileName
         : 'BinaryAttachment';
 
-      cv.PathOnClient = String.isNotBlank(att.fileName)
-        ? att.fileName
-        : 'BinaryAttachment';
+      if (fileName.length() > 255) {
+        fileName = fileName.left(255);
+      }
+
+      cv.Title = fileName;
+      cv.PathOnClient = fileName;
 
       cv.VersionData = att.body;
 
@@ -375,17 +442,35 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
         continue;
       }
 
+      Blob textBlob = Blob.valueOf(att.body);
+
+      // Check attachment size limit
+      Integer attSize = textBlob.size();
+      if (totalBytes + attSize > MAX_TOTAL_ATTACHMENT_BYTES) {
+        System.debug(
+          LoggingLevel.WARN,
+          'Attachment size limit exceeded. Skipping remaining attachments.'
+        );
+        break;
+      }
+
+      totalBytes += attSize;
+
       ContentVersion cv = new ContentVersion();
 
-      cv.Title = String.isNotBlank(att.fileName)
+      // Truncate filename to 255 characters
+      String fileName = String.isNotBlank(att.fileName)
         ? att.fileName
         : 'TextAttachment';
 
-      cv.PathOnClient = String.isNotBlank(att.fileName)
-        ? att.fileName
-        : 'TextAttachment';
+      if (fileName.length() > 255) {
+        fileName = fileName.left(255);
+      }
 
-      cv.VersionData = Blob.valueOf(att.body);
+      cv.Title = fileName;
+      cv.PathOnClient = fileName;
+
+      cv.VersionData = textBlob;
 
       versions.add(cv);
     }
@@ -419,15 +504,36 @@ global with sharing class CaseInboundEmailHandler implements Messaging.InboundEm
       );
     }
 
-        if (!links.isEmpty()) {
-            insert links;
-        }
+    if (!links.isEmpty()) {
+      insert links;
+    }
+  }
+
+  // ===========================================================================
+  // HELPER: NORMALIZE EMAIL
+  // ===========================================================================
+
+  /**
+   * Normalizes an email address for case-insensitive comparison.
+   * Handles formats like "Name <email@example.com>" and extracts the email.
+   */
+  private String normalizeEmail(String emailAddress) {
+    if (String.isBlank(emailAddress)) {
+      return null;
     }
 
-  // Helper: safe truncation
-  private static String truncate(String s, Integer len) {
-    if (s == null) return null;
-    if (s.length() <= len) return s;
-    return s.substring(0, len);
+    String normalized = emailAddress.trim().toLowerCase();
+
+    // Extract email from "Name <email@example.com>" format
+    if (normalized.contains('<') && normalized.contains('>')) {
+      Integer startIndex = normalized.indexOf('<') + 1;
+      Integer endIndex = normalized.indexOf('>');
+
+      if (startIndex > 0 && endIndex > startIndex) {
+        normalized = normalized.substring(startIndex, endIndex);
+      }
+    }
+
+    return normalized;
   }
 }
