@@ -1,6 +1,7 @@
 <apex:page renderAs="Pdf" showHeader="false" sidebar="false" standardStylesheets="false" applyBodyTag="false" applyHtmlTag="false"
     contentType="application/pdf" controller="AccountDetailsVfController">
     <apex:image value="{!$Resource.brandimage}" width="150" height="80" />
+    <apex:pageMessages/>
     <table width="100%">
         <tr>
             <td>
@@ -63,7 +64,10 @@
                     </apex:outputText>
                 </td>
                 <td style="padding: 8px; text-align: right;">
-                    <apex:outputText value="{0, number, currency}" rendered="{!Not(ISBLANK(opportunitylineitem.TotalPrice))}">
+                    <apex:outputText value="{0, number, currency}" rendered="{!AND(
+        NOT(ISBLANK(opportunitylineitem.TotalPrice)),
+        opportunitylineitem.TotalPrice > 0
+    )}">
                         <apex:param value="{!opportunitylineitem.TotalPrice}" />
                     </apex:outputText>
                 </td>

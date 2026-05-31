@@ -7,6 +7,14 @@ public with sharing class AccountDetailsVfController {
   }
 
   public AccountDetailsVfWrapper getAccountDetails() {
+    if(accountId == null) {
+      ApexPages.Message msg = new ApexPages.Message(
+        ApexPages.Severity.ERROR,
+        'No Account Id provided in the URL.'
+      );
+      ApexPages.addMessage(msg);
+      return null;
+    }
     if (accountDetails == null) {
       accountDetails = buildAccountDetails();
     }
