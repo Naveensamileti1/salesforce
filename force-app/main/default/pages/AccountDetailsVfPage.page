@@ -1,0 +1,63 @@
+<apex:page renderAs="Pdf" showHeader="false" sidebar="false" standardStylesheets="false" applyBodyTag="false" applyHtmlTag="false"
+    contentType="application/pdf" controller="AccountDetailsVfController">
+    <h1>Account Details</h1>
+    <p>
+        <strong>Account Name:</strong> {!accountDetails.acc.accName}</p>
+    <p>
+        <strong>Account Phone:</strong> {!accountDetails.acc.accPhone}</p>
+    <p>
+        <strong>Account Type:</strong> {!accountDetails.acc.accType}</p>
+    <p>
+        <strong>Billing Address:</strong> {!accountDetails.acc.billingAddress}</p>
+    <p>
+        <strong>Shipping Address:</strong> {!accountDetails.acc.shippingAddress}</p>
+
+
+    <h2>Contacts</h2>
+    <table style="width:100%; border-collapse: collapse;" border="1">
+        <tr>
+            <th style="padding: 8px; text-align: left;">Contact Name</th>
+            <th style="padding: 8px; text-align: left;">Contact Email</th>
+            <th style="padding: 8px; text-align: left;">Contact Phone</th>
+        </tr>
+        <apex:repeat value="{!accountDetails.lstContact}" var="contact">
+            <tr>
+                <td style="padding: 8px; text-align: left;">{!contact.Name}</td>
+                <td style="padding: 8px; text-align: left;">{!contact.Email}</td>
+                <td style="padding: 8px; text-align: left;">{!contact.Phone}</td>
+            </tr>
+        </apex:repeat>
+    </table>
+
+    <h2>Opportunity Products</h2>
+    <table style="width:100%; border-collapse: collapse;" border="1">
+        <tr>
+            <th style="padding: 8px; text-align: left;">Opportunity Name</th>
+            <th style="padding: 8px; text-align: left;">Product Name</th>
+            <th style="padding: 8px; text-align: left;">Quantity</th>
+            <th style="padding: 8px; text-align: left;">Unit Price</th>
+            <th style="padding: 8px; text-align: left;">Total Price</th>
+        </tr>
+        <apex:repeat value="{!accountDetails.lstOppLineItem}" var="opportunitylineitem">
+            <tr>
+                <td style="padding: 8px; text-align: left;">{!opportunitylineitem.Opportunity.Name}</td>
+                <td style="padding: 8px; text-align: left;">{!opportunitylineitem.PricebookEntry.Product2.Name}</td>
+                <td style="padding: 8px; text-align: right;">
+                    <apex:outputText value="{0, number, 0.0}">
+                        <apex:param value="{!opportunitylineitem.Quantity}" />
+                    </apex:outputText>
+                </td>
+                <td style="padding: 8px; text-align: right;">
+                    <apex:outputText value="{0, number, currency}" rendered="{!Not(ISBLANK(opportunitylineitem.UnitPrice))}">
+                        <apex:param value="{!opportunitylineitem.UnitPrice}" />
+                    </apex:outputText>
+                </td>
+                <td style="padding: 8px; text-align: right;">
+                    <apex:outputText value="{0, number, currency}" rendered="{!Not(ISBLANK(opportunitylineitem.TotalPrice))}">
+                        <apex:param value="{!opportunitylineitem.TotalPrice}" />
+                    </apex:outputText>
+                </td>
+            </tr>
+        </apex:repeat>
+    </table>
+</apex:page>
