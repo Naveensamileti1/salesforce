@@ -1,6 +1,16 @@
 <apex:page renderAs="Pdf" showHeader="false" sidebar="false" standardStylesheets="false" applyBodyTag="false" applyHtmlTag="false"
     contentType="application/pdf" controller="AccountDetailsVfController">
-    <h1>Account Details</h1>
+    <apex:image value="{!$Resource.brandimage}" width="150" height="80" />
+    <table width="100%">
+        <tr>
+            <td>
+                <h1>Account Details</h1>
+            </td>
+            <td align="right">
+                <apex:image url="{!URLFOR($Resource.brandimage)}" width="150" height="80" />
+            </td>
+        </tr>
+    </table>
     <p>
         <strong>Account Name:</strong> {!accountDetails.acc.accName}</p>
     <p>
