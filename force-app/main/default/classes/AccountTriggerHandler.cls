@@ -238,14 +238,15 @@ public class AccountTriggerHandler extends TriggerHandler {
     if (accountIds.isEmpty()) {
       return;
     }
-    
+
     List<Opportunity> oppsToUpdate = [
       SELECT Id, Description, AccountId, LastActivityDate, CreatedDate, IsClosed
       FROM Opportunity
       WHERE
         AccountId IN :accountIds
-        AND IsClosed = false
-        AND (LastActivityDate = NULL OR LastActivityDate < :Date.today().addDays(-30))
+        AND IsClosed = FALSE
+        AND (LastActivityDate = NULL
+        OR LastActivityDate < :Date.today().addDays(-30))
     ];
 
     if (oppsToUpdate.isEmpty()) {
@@ -254,7 +255,7 @@ public class AccountTriggerHandler extends TriggerHandler {
 
     List<Opportunity> updates = new List<Opportunity>();
     String messageLower = STALE_OPP_MESSAGE.toLowerCase();
- 
+
     for (Opportunity opp : oppsToUpdate) {
       String existingDesc = opp.Description == null ? '' : opp.Description;
       // Perform lowercase conversion only once per opportunity description when needed.
@@ -265,7 +266,8 @@ public class AccountTriggerHandler extends TriggerHandler {
       }
       if (!containsMessage) {
         Opportunity u = new Opportunity(Id = opp.Id);
-        u.Description = (existingDesc == '' ? '' : existingDesc + '\n') + STALE_OPP_MESSAGE;
+        u.Description =
+          (existingDesc == '' ? '' : existingDesc + '\n') + STALE_OPP_MESSAGE;
         updates.add(u);
       }
     }
@@ -289,6 +291,52 @@ public class AccountTriggerHandler extends TriggerHandler {
             err.getMessage()
         );
       }
+    }
+  }
+
+  @AuraEnabled
+  public static void sendAccountDetailsEmail(Id accountId) {
+    try {
+      // Generate PDF
+      PageReference pageRef = Page.AccountDetailsVFPage;
+      pageRef.getParameters().put('accountId', accountId);
+
+      Blob pdfBlob = Test.isRunningTest()
+        ? Blob.valueOf('Test PDF')
+        : pageRef.getContentAsPDF();
+
+      // Query Account
+      Account acc = [
+        SELECT Email__c
+        FROM Account
+        WHERE Id = :accountId
+        LIMIT 1
+      ];
+
+      if (String.isBlank(acc.Email__c)) {
+        throw new AuraHandledException(
+          'Email address is not available for this Account.'
+        );
+      }
+
+      // Attachment
+      EmailUtility.BlobAttachment attachment = new EmailUtility.BlobAttachment();
+      attachment.fileName = 'AccountDetails.pdf';
+      attachment.body = pdfBlob;
+      attachment.contentType = 'application/pdf';
+
+      // Email Request
+      EmailUtility.EmailRequest request = new EmailUtility.EmailRequest();
+      request.whatId = accountId;
+      request.templateDeveloperName = 'sendViewDetailsTemplate';
+      request.toAddresses.add(acc.Email__c);
+      request.blobAttachments.add(attachment);
+      request.renderTemplate = true;
+      request.targetObjectId = userInfo.getUserId(); // Set targetObjectId to the Account's Id for merge fields
+
+      EmailUtility.sendEmail(request);
+    } catch (Exception ex) {
+      throw new AuraHandledException(ex.getMessage());
     }
   }
 }

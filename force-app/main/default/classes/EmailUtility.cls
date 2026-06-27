@@ -471,6 +471,8 @@ public with sharing class EmailUtility {
         if (!String.isBlank(renderedEmail.getPlainTextBody())) {
           email.setPlainTextBody(renderedEmail.getPlainTextBody());
         }
+
+        email.setTreatTargetObjectAsRecipient(false);
       } else {
         email.setTemplateId(request.templateId);
 
