@@ -332,7 +332,8 @@ public class AccountTriggerHandler extends TriggerHandler {
       request.toAddresses.add(acc.Email__c);
       request.blobAttachments.add(attachment);
       request.renderTemplate = true;
-      request.targetObjectId = userInfo.getUserId(); // Set targetObjectId to the Account's Id for merge fields
+      //request.targetObjectId = userInfo.getUserId();
+      request.saveAsActivity = true;
 
       EmailUtility.sendEmail(request);
     } catch (Exception ex) {

@@ -38,6 +38,9 @@ public with sharing class EmailUtility {
       }
     }
 
+    System.debug('Emails to send: ' + emails.size());
+    System.debug('Email object: ' + emails);
+
     // Send emails
     List<Messaging.SendEmailResult> sendResults = Messaging.sendEmail(
       emails,
@@ -67,6 +70,16 @@ public with sharing class EmailUtility {
       results.add(result);
 
       index++;
+    }
+
+    for (Messaging.SendEmailResult r : sendResults) {
+      System.debug('Success: ' + r.isSuccess());
+
+      if (!r.isSuccess()) {
+        for (Messaging.SendEmailError e : r.getErrors()) {
+          System.debug(e.getMessage());
+        }
+      }
     }
 
     return results;
@@ -168,19 +181,16 @@ public with sharing class EmailUtility {
 
     // Remove duplicate email addresses
     for (EmailRequest request : requests) {
-      request.resolvedToAddresses.clear();
-      request.resolvedCcAddresses.clear();
-      request.resolvedBccAddresses.clear();
       request.resolvedToAddresses = removeDuplicates(
-        request.resolvedToAddresses
+        new List<String>(request.resolvedToAddresses)
       );
 
       request.resolvedCcAddresses = removeDuplicates(
-        request.resolvedCcAddresses
+        new List<String>(request.resolvedCcAddresses)
       );
 
       request.resolvedBccAddresses = removeDuplicates(
-        request.resolvedBccAddresses
+        new List<String>(request.resolvedBccAddresses)
       );
     }
   }
@@ -406,13 +416,7 @@ public with sharing class EmailUtility {
     if (request.templateId == null) {
       return null;
     }
-
-    if (request.targetObjectId == null) {
-      throw new EmailFrameworkException(
-        'targetObjectId is required to render Email Template.'
-      );
-    }
-
+    
     return Messaging.renderStoredEmailTemplate(
       request.templateId,
       request.targetObjectId,
@@ -557,9 +561,22 @@ public with sharing class EmailUtility {
     attachments.addAll(request.attachments);
     attachments.addAll(request.resolvedAttachments);
 
+    System.debug(
+      'Attachments Before setFileAttachments: ' + attachments.size()
+    );
+
+    for (Messaging.EmailFileAttachment a : attachments) {
+      System.debug('Sending Attachment: ' + a.getFileName());
+      System.debug('Size: ' + a.getBody().size());
+    }
+
     if (!attachments.isEmpty()) {
       email.setFileAttachments(attachments);
     }
+
+    email.setFileAttachments(attachments);
+
+    System.debug('setFileAttachments completed.');
 
     return email;
   }
@@ -588,7 +605,6 @@ public with sharing class EmailUtility {
 
     // Collect Ids
     for (EmailRequest request : requests) {
-      request.resolvedAttachments.clear();
       contentVersionIds.addAll(request.contentVersionIds);
       contentDocumentIds.addAll(request.contentDocumentIds);
     }
@@ -672,6 +688,15 @@ public with sharing class EmailUtility {
         }
 
         request.resolvedAttachments.add(attachment);
+
+        System.debug(
+          'Resolved Attachments Count: ' + request.resolvedAttachments.size()
+        );
+
+        for (Messaging.EmailFileAttachment a : request.resolvedAttachments) {
+          System.debug('Attachment Name: ' + a.getFileName());
+          System.debug('Attachment Body Size: ' + a.getBody().size());
+        }
       }
     }
   }
