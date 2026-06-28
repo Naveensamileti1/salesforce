@@ -332,8 +332,9 @@ public class AccountTriggerHandler extends TriggerHandler {
       request.toAddresses.add(acc.Email__c);
       request.blobAttachments.add(attachment);
       request.renderTemplate = true;
-      //request.targetObjectId = userInfo.getUserId();
+      request.targetObjectId = userInfo.getUserId();
       request.saveAsActivity = true;
+      request.treatTargetObjectAsRecipient = false;
 
       EmailUtility.sendEmail(request);
     } catch (Exception ex) {

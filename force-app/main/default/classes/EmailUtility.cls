@@ -416,7 +416,7 @@ public with sharing class EmailUtility {
     if (request.templateId == null) {
       return null;
     }
-    
+
     return Messaging.renderStoredEmailTemplate(
       request.templateId,
       request.targetObjectId,
@@ -476,7 +476,13 @@ public with sharing class EmailUtility {
           email.setPlainTextBody(renderedEmail.getPlainTextBody());
         }
 
-        email.setTreatTargetObjectAsRecipient(false);
+        email.setTargetObjectId(request.targetObjectId);
+        email.setWhatId(request.whatId);
+        email.setSaveAsActivity(request.saveAsActivity);
+
+        email.setTreatTargetObjectAsRecipient(
+          request.treatTargetObjectAsRecipient
+        );
       } else {
         email.setTemplateId(request.templateId);
 
